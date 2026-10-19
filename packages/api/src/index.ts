@@ -17,3 +17,7 @@ export {
   assertContractId,
   MAX_BATCH_IDS,
 } from './params.js';
+export { executeGraphQL, parseDocument, GraphQLRequestError } from './graphql.js';
+export type { GraphQLOptions, GraphQLRequest, GraphQLResponse, GraphQLResult, GraphQLErrorCode } from './graphql.js';
+export { WebhookManager, verifyWebhookSignature, isPrivateAddress, parseWebhookUrl } from './webhooks.js';
+export type { WebhookOptions, WebhookFilter, WebhookSubscription, RegisteredWebhook, DeadLetter } from './webhooks.js';

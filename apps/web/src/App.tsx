@@ -5,7 +5,7 @@ import { Filters, type FilterState } from './components/Filters.js';
 import { EventTable } from './components/EventTable.js';
 import { StatusBar } from './components/StatusBar.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
-import { usePersistentState, usePolling, useDebounced, useEventStream } from './hooks.js';
+import { usePersistentState, usePolling, useDebounced, useEventStream, useTheme } from './hooks.js';
 
 /** Testnet Stellar Asset Contract for native XLM — always emitting events. */
 const EXAMPLE_CONTRACT = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC'; // XLM SAC
@@ -35,6 +35,11 @@ export function App(): React.JSX.Element {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+  // A 404 for a contract means this indexer has never seen it; an empty page
+  // with emptyReason means it is indexed but nothing matches the filters.
+  const [contractUnknown, setContractUnknown] = useState(false);
+  const [emptyReason, setEmptyReason] = useState<'no_matching_events' | null>(null);
+  const [theme, toggleTheme] = useTheme();
 
   // Typing a 56-character contract id should not fire 56 requests.
   const debouncedContractId = useDebounced(filters.contractId, 300);
@@ -63,10 +68,22 @@ export function App(): React.JSX.Element {
       setEvents(page.events);
       setTotal(page.total);
       setNextCursor(page.nextCursor);
+      setContractUnknown(false);
+      setEmptyReason(page.emptyReason ?? null);
       setError(null);
       setLastUpdated(Date.now());
     } catch (err) {
       if (id !== requestId.current) return;
+      if (err instanceof ApiRequestError && err.status === 404 && query.contractId) {
+        setEvents([]);
+        setTotal(0);
+        setNextCursor(null);
+        setContractUnknown(true);
+        setEmptyReason(null);
+        setError(null);
+        setLastUpdated(Date.now());
+        return;
+      }
       setError(err instanceof ApiRequestError ? err.message : String(err));
     } finally {
       if (id === requestId.current) setLoading(false);
@@ -207,10 +224,21 @@ export function App(): React.JSX.Element {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>
-          soroban<span className="accent">-lens</span>
-        </h1>
-        <p className="tagline">See what your Soroban contracts are actually emitting.</p>
+        <div>
+          <h1>
+            soroban<span className="accent">-lens</span>
+          </h1>
+          <p className="tagline">See what your Soroban contracts are actually emitting.</p>
+        </div>
+        <button
+          type="button"
+          className="theme-toggle"
+          onClick={toggleTheme}
+          aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+        >
+          {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+        </button>
       </header>
 
       <ErrorBoundary title="Status Bar Error">
@@ -279,9 +307,13 @@ export function App(): React.JSX.Element {
           loading={loading}
           onTopicClick={(topic) => setFilters({ ...filters, topic })}
           emptyMessage={
-            health && health.events === 0
-              ? 'Nothing indexed yet. Start the indexer, or load the fixture with `npm run seed`.'
-              : 'No events match these filters.'
+            contractUnknown
+              ? 'This contract has not been seen by this indexer. Check the id, and that it is one this instance indexes (LENS_CONTRACT_IDS).'
+              : emptyReason === 'no_matching_events'
+                ? 'This contract is indexed, but no events match these filters.'
+                : health && health.events === 0
+                  ? 'Nothing indexed yet. Start the indexer, or load the fixture with `npm run seed`.'
+                  : 'No events match these filters.'
           }
         />
       </ErrorBoundary>

@@ -27,6 +27,8 @@ import {
   parseIds,
   selectFields,
 } from './params.js';
+import { executeGraphQL, type GraphQLOptions } from './graphql.js';
+import { WebhookManager, type WebhookOptions } from './webhooks.js';
 import { ApiKeyAuthenticator } from './auth.js';
 import { TokenBucketLimiter, clientKey, type RateLimitOptions } from './rate-limit.js';
 import { EventStreamHub, type EventStreamOptions } from './stream.js';
@@ -64,6 +66,34 @@ export interface ApiServerOptions {
   trustProxy?: boolean;
   /** Tuning for `GET /events/stream` (#42). */
   stream?: EventStreamOptions;
+  /** Optional GraphQL endpoint at /graphql. Disabled unless `enabled: true` (#60). */
+  graphql?: GraphQLOptions;
+  /** Optional webhook subscriptions at /webhooks. Disabled unless `enabled: true` (#59). */
+  webhooks?: WebhookOptions;
+}
+
+/** Largest request body accepted by the POST routes. */
+const MAX_BODY_BYTES = 100 * 1024;
+
+/** Read and parse a JSON request body, refusing anything over `MAX_BODY_BYTES`. */
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    const buffer = chunk as Buffer;
+    size += buffer.length;
+    if (size > MAX_BODY_BYTES) {
+      throw new ApiError(413, 'payload_too_large', `The request body must be at most ${MAX_BODY_BYTES} bytes.`);
+    }
+    chunks.push(buffer);
+  }
+  const text = Buffer.concat(chunks).toString('utf8');
+  if (text.trim() === '') throw ApiError.badRequest('A JSON request body is required.');
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw ApiError.badRequest('The request body is not valid JSON.');
+  }
 }
 
 /**
@@ -97,6 +127,11 @@ type Handler = (ctx: {
   options: ApiServerOptions;
   /** Parsed contract specs, for the typed view of each event (#33). */
   specs: SpecCache;
+  /** Present only when webhooks are enabled. */
+  webhooks: WebhookManager | undefined;
+  headers: IncomingMessage['headers'];
+  /** Parse the request body as JSON, bounded to `MAX_BODY_BYTES`. */
+  readJson: () => Promise<unknown>;
   /** The raw exchange, for the one route that streams instead of returning a body. */
   req: IncomingMessage;
   res: ServerResponse;
@@ -275,7 +310,21 @@ const routes: Route[] = [
         return { stream: csvExport(store, eventQuery, `${contractId}-events.csv`) };
       }
       const page = await store.queryEvents(eventQuery);
-      return { body: { ...page, events: selectFields(await specs.annotate(page.events), fields) } };
+      const events = selectFields(await specs.annotate(page.events), fields);
+      if (page.events.length > 0) return { body: { ...page, events } };
+
+      // An empty page is three different situations (#58). Telling them apart
+      // takes one more query, so it is only paid on the empty path: is there
+      // *any* event for this contract, ignoring the filters?
+      const known = await store.queryEvents({ contractId, limit: 1 });
+      if (known.events.length === 0) {
+        throw ApiError.notFound(
+          `No indexed events for contract "${contractId}". ` +
+            'The contract may not exist, or may exist on-chain but not be one this instance indexes — ' +
+            'check LENS_CONTRACT_IDS.',
+        );
+      }
+      return { body: { ...page, events, emptyReason: 'no_matching_events' } };
     },
   },
   {
@@ -428,6 +477,93 @@ const routes: Route[] = [
     },
   },
   {
+    // Optional GraphQL over the same store (#60). GET carries the query in the
+    // URL, POST in a JSON body, per the GraphQL-over-HTTP convention.
+    method: 'GET',
+    pattern: /^\/graphql$/,
+    handler: async ({ query, store, options }) => {
+      requireGraphQL(options);
+      const variables = query.get('variables');
+      let parsed: unknown;
+      if (variables) {
+        try {
+          parsed = JSON.parse(variables);
+        } catch {
+          throw ApiError.badRequest('"variables" must be a JSON object.', 'variables');
+        }
+      }
+      const result = await executeGraphQL(
+        { query: query.get('query') ?? '', variables: parsed, operationName: query.get('operationName') ?? undefined },
+        store,
+        options.graphql,
+      );
+      return { status: result.status, body: result.body };
+    },
+  },
+  {
+    method: 'POST',
+    pattern: /^\/graphql$/,
+    handler: async ({ store, options, readJson }) => {
+      requireGraphQL(options);
+      const body = await readJson();
+      if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+        throw ApiError.badRequest('The request body must be a JSON object with a "query" string.');
+      }
+      const { query, variables, operationName } = body as Record<string, unknown>;
+      const result = await executeGraphQL(
+        {
+          query: typeof query === 'string' ? query : '',
+          variables,
+          operationName: typeof operationName === 'string' ? operationName : undefined,
+        },
+        store,
+        options.graphql,
+      );
+      return { status: result.status, body: result.body };
+    },
+  },
+  {
+    method: 'POST',
+    pattern: /^\/webhooks$/,
+    handler: async ({ webhooks, headers, readJson }) => {
+      const manager = requireWebhooks(webhooks, headers);
+      return { status: 201, body: await manager.register(await readJson()) };
+    },
+  },
+  {
+    method: 'GET',
+    pattern: /^\/webhooks$/,
+    handler: async ({ webhooks, headers }) => {
+      return { body: { webhooks: requireWebhooks(webhooks, headers).list() } };
+    },
+  },
+  {
+    method: 'GET',
+    pattern: /^\/webhooks\/([^/]+)$/,
+    handler: async ({ params, webhooks, headers }) => {
+      return { body: requireWebhooks(webhooks, headers).get(decodeURIComponent(params[0] as string)) };
+    },
+  },
+  {
+    method: 'DELETE',
+    pattern: /^\/webhooks\/([^/]+)$/,
+    handler: async ({ params, webhooks, headers }) => {
+      const id = decodeURIComponent(params[0] as string);
+      requireWebhooks(webhooks, headers).remove(id);
+      return { body: { deleted: true, id } };
+    },
+  },
+  {
+    // Events that exhausted their retries. The record is how a receiver that
+    // was down for longer than the retry window finds out what it missed.
+    method: 'GET',
+    pattern: /^\/webhooks\/([^/]+)\/dead-letters$/,
+    handler: async ({ params, webhooks, headers }) => {
+      const id = decodeURIComponent(params[0] as string);
+      return { body: { deadLetters: requireWebhooks(webhooks, headers).deadLetters(id) } };
+    },
+  },
+  {
     method: 'GET',
     pattern: /^\/openapi\.json$/,
     exemptFromSchemaCheck: true,
@@ -453,6 +589,25 @@ const routes: Route[] = [
     }),
   },
 ];
+
+/** 404 rather than 403 while disabled: the endpoint simply does not exist. */
+function requireGraphQL(options: ApiServerOptions): void {
+  if (!options.graphql?.enabled) {
+    throw ApiError.notFound('GraphQL is disabled. Start the API with LENS_GRAPHQL=1 to enable /graphql.');
+  }
+}
+
+function requireWebhooks(
+  webhooks: WebhookManager | undefined,
+  headers: IncomingMessage['headers'],
+): WebhookManager {
+  if (!webhooks) {
+    throw ApiError.notFound('Webhook subscriptions are disabled. Start the API with LENS_WEBHOOKS=1 to enable /webhooks.');
+  }
+  const auth = headers['authorization'];
+  webhooks.authorize(Array.isArray(auth) ? auth[0] : auth);
+  return webhooks;
+}
 
 /**
  * Redoc, pinned to an exact version from a CDN — not `@latest`, so an
@@ -611,11 +766,18 @@ export function createApiServer(options: ApiServerOptions): Server {
   // One per server: specs are per database, and the TTL is what lets a spec
   // the indexer fetches after startup show up without restarting the API.
   const specs = new SpecCache((contractId) => store.getContractSpec(contractId));
+  const webhooks = options.webhooks?.enabled ? new WebhookManager(store, options.webhooks, log) : undefined;
   const streams = new EventStreamHub(store, (events) => specs.annotate(events), log, options.stream);
 
   const server = createHttpServer((req: IncomingMessage, res: ServerResponse) => {
     void handle(req, res);
   });
+  if (webhooks) {
+    webhooks.start();
+    // The dispatcher's timer is unref'd, but stopping it explicitly also ends
+    // any delivery that is sleeping between retries.
+    server.on('close', () => webhooks.stop());
+  }
   const active = new Set<ServerResponse>();
   inFlight.set(server, active);
 
@@ -650,8 +812,11 @@ export function createApiServer(options: ApiServerOptions): Server {
     res.setHeader('X-Request-Id', requestId);
 
     res.setHeader('Access-Control-Allow-Origin', corsOrigin);
-    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key, If-None-Match, Last-Event-ID');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, POST, DELETE, OPTIONS');
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      'Content-Type, Authorization, X-API-Key, If-None-Match, Last-Event-ID',
+    );
     // Without this a browser hides ETag and Retry-After from cross-origin scripts.
     res.setHeader('Access-Control-Expose-Headers', 'ETag, Retry-After, X-Request-Id');
 
@@ -670,12 +835,14 @@ export function createApiServer(options: ApiServerOptions): Server {
 
     try {
       const path = url.pathname.replace(/\/+$/, '') || '/';
-      const route = routes.find((r) => r.pattern.test(path));
+      const candidates = routes.filter((r) => r.pattern.test(path));
 
       // Before the 404 and the schema check, so a caller who is throttled or
       // unauthenticated learns nothing about which routes exist or what state the
       // database is in. The limiter runs first: it is what stops key guessing.
-      if (!route?.public) {
+      // Public only when every route on this path is (/health, /openapi.json, /docs).
+      const isPublic = candidates.length > 0 && candidates.every((r) => r.public);
+      if (!isPublic) {
         if (limiter) {
           const decision = limiter.take(clientKey(req, trustProxy));
           if (!decision.allowed) {
@@ -694,16 +861,19 @@ export function createApiServer(options: ApiServerOptions): Server {
         }
       }
 
-      if (!route) {
+      if (candidates.length === 0) {
         throw ApiError.notFound(`No route for ${req.method} ${path}. See GET /openapi.json.`);
       }
-      if (route.method !== method) {
+      const route = candidates.find((r) => r.method === method);
+      if (!route) {
+        const allowed = [...new Set(candidates.map((r) => r.method))];
         throw new ApiError(
           405,
           'method_not_allowed',
-          `${path} accepts ${route.method} only.`,
+          `${path} accepts ${allowed.join(', ')} only.`,
           undefined,
-          route.method === 'GET' ? 'GET, HEAD' : route.method,
+          // HEAD rides along with GET (RFC 9110), so Allow must say so.
+          allowed.flatMap((m) => (m === 'GET' ? ['GET', 'HEAD'] : [m])).join(', '),
         );
       }
 
@@ -742,6 +912,9 @@ export function createApiServer(options: ApiServerOptions): Server {
         store,
         options,
         specs,
+        webhooks,
+        headers: req.headers,
+        readJson: () => readJsonBody(req),
         req,
         res,
         streams,

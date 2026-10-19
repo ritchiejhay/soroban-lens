@@ -74,8 +74,8 @@ request cannot overwrite a newer one when filters change quickly.
 hands it to a static server.
 
 **No design system**, by project constraint — the CSS is hand-written in
-[`src/styles.css`](./src/styles.css). Light theme only; dark mode is a tracked
-issue.
+[`src/styles.css`](./src/styles.css). Light and dark themes: dark follows the system
+setting unless the header toggle overrides it; the choice is saved in `localStorage`.
 
 ## Tests
 
