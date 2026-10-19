@@ -1064,6 +1064,68 @@ test('the OpenAPI spec documents the typed view and the spec route', async () =>
   });
 });
 
+// ── #58 "no such contract" vs "no events" ────────────────────────────────────
+
+test('events for a contract that was never indexed are a 404, not an empty page', async () => {
+  await withServer(async ({ get }) => {
+    const absent = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB';
+    const { res, body } = await get(`/contracts/${absent}/events`);
+    assert.equal(res.status, 404);
+    assert.equal(body.error.code, 'not_found');
+    assert.match(body.error.message, /LENS_CONTRACT_IDS/);
+  });
+});
+
+test('a known contract with no matching events is an empty page that says why', async () => {
+  await withServer(async ({ get }) => {
+    const { res, body } = await get(`/contracts/${SAC}/events?fromLedger=2000000000`);
+    assert.equal(res.status, 200);
+    assert.deepEqual(body.events, []);
+    assert.equal(body.total, 0);
+    assert.equal(body.emptyReason, 'no_matching_events');
+  });
+});
+
+test('a non-empty contract page carries no emptyReason', async () => {
+  await withServer(async ({ get }) => {
+    const { body } = await get(`/contracts/${SAC}/events?limit=1`);
+    assert.ok(body.events.length > 0);
+    assert.ok(!('emptyReason' in body));
+  });
+});
+
+test('the OpenAPI spec documents the 404, emptyReason, /graphql and /webhooks', async () => {
+  await withServer(async ({ get }) => {
+    const { body } = await get('/openapi.json');
+    assert.ok(body.paths['/contracts/{contractId}/events'].get.responses['404']);
+    assert.ok(body.components.schemas.EventPage.properties.emptyReason);
+    for (const path of ['/graphql', '/webhooks', '/webhooks/{webhookId}', '/webhooks/{webhookId}/dead-letters']) {
+      assert.ok(body.paths[path], `spec is missing ${path}`);
+    }
+  });
+});
+
+test('/graphql and /webhooks do not exist unless enabled', async () => {
+  await withServer(async ({ base }) => {
+    const gql = await fetch(`${base}/graphql`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: '{ topics(contractId: "x") { topic } }' }),
+    });
+    assert.equal(gql.status, 404);
+    const hooks = await fetch(`${base}/webhooks`);
+    assert.equal(hooks.status, 404);
+  });
+});
+
+test('a 405 on a multi-method route lists every method', async () => {
+  await withServer(async ({ base }) => {
+    const res = await fetch(`${base}/graphql`, { method: 'DELETE' });
+    assert.equal(res.status, 405);
+    assert.equal(res.headers.get('allow'), 'GET, HEAD, POST');
+  });
+});
+
 test('?fields= returns only the selected event properties; the default is unchanged', async () => {
   await withServer(async ({ get }) => {
     const full = await get(`/contracts/${SAC}/events?limit=5`);

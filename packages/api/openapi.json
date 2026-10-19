@@ -4,7 +4,7 @@
     "title": "soroban-lens Query API",
     "version": "0.1.0",
     "summary": "Read-only HTTP API over indexed Soroban contract events.",
-    "description": "Serves events indexed from a Soroban RPC node. Read-only. Unauthenticated and unlimited by default; an operator can turn on per-IP rate limiting (`LENS_RATE_LIMIT_RPS`) and API keys (`LENS_API_KEYS`), in which case every route except `/health`, `/openapi.json` and `/docs` requires a key sent as `X-API-Key` or `Authorization: Bearer`, and a client over its limit receives `429` with `Retry-After`.\n\nPagination is keyset-based: pass the `nextCursor` from a response back as `cursor`. Pass the `prevCursor` back as `cursor` together with `direction=backward` to return to the previous page; paging forward and then back returns the original page exactly. Pages stay stable while the indexer writes new events behind them, which offset pagination cannot promise.\n\n`GET /events` and `GET /contracts/{contractId}/events` carry an `ETag` derived from the newest indexed event id and the request's filter. Send it back as `If-None-Match` and an unchanged poll is answered with `304` and no body. `GET /events/stream` pushes new events as Server-Sent Events instead of polling.\n\nDecoded integer values are JSON **strings**, not numbers. Soroban `i128`/`u128` amounts routinely exceed `Number.MAX_SAFE_INTEGER`, so treating them as numbers loses precision on large transfers. Decoded `bytes` are lower-case hex strings.\n\nEvery route below also accepts `HEAD`, which returns the same status and headers as `GET` with an empty body \u2014 including the `Content-Length` the body would have had. The `head` operations are not listed separately.\n\nResponses of 1KB or more are gzip- or deflate-compressed when the request's `Accept-Encoding` header allows it, with `Vary: Accept-Encoding` set so a cache in front of this API knows the body varies by that header. A request sending no `Accept-Encoding` \u2014 or `identity` \u2014 always gets uncompressed JSON.",
+    "description": "Serves events indexed from a Soroban RPC node. Read-only. Unauthenticated and unlimited by default; an operator can turn on per-IP rate limiting (`LENS_RATE_LIMIT_RPS`) and API keys (`LENS_API_KEYS`), in which case every route except `/health`, `/openapi.json` and `/docs` requires a key sent as `X-API-Key` or `Authorization: Bearer`, and a client over its limit receives `429` with `Retry-After`.\n\nPagination is keyset-based: pass the `nextCursor` from a response back as `cursor`. Pass the `prevCursor` back as `cursor` together with `direction=backward` to return to the previous page; paging forward and then back returns the original page exactly. Pages stay stable while the indexer writes new events behind them, which offset pagination cannot promise.\n\n`GET /events` and `GET /contracts/{contractId}/events` carry an `ETag` derived from the newest indexed event id and the request's filter. Send it back as `If-None-Match` and an unchanged poll is answered with `304` and no body. `GET /events/stream` pushes new events as Server-Sent Events instead of polling.\n\nDecoded integer values are JSON **strings**, not numbers. Soroban `i128`/`u128` amounts routinely exceed `Number.MAX_SAFE_INTEGER`, so treating them as numbers loses precision on large transfers. Decoded `bytes` are lower-case hex strings.\n\nEvery route below also accepts `HEAD`, which returns the same status and headers as `GET` with an empty body — including the `Content-Length` the body would have had. The `head` operations are not listed separately.\n\nResponses of 1KB or more are gzip- or deflate-compressed when the request's `Accept-Encoding` header allows it, with `Vary: Accept-Encoding` set so a cache in front of this API knows the body varies by that header. A request sending no `Accept-Encoding` — or `identity` — always gets uncompressed JSON.\n\nTwo features are **off by default** because they widen what the server does: `/graphql` (a query endpoint over the same data) and `/webhooks` (the server POSTs events to client-supplied URLs). Both answer `404` until an operator enables them; see the API README. When API keys are also enabled, send the key as `X-API-Key` so `Authorization: Bearer` stays free for the webhook token.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
@@ -28,6 +28,14 @@
     {
       "name": "system",
       "description": "Health and indexer progress"
+    },
+    {
+      "name": "graphql",
+      "description": "Optional GraphQL endpoint"
+    },
+    {
+      "name": "webhooks",
+      "description": "Optional webhook subscriptions"
     }
   ],
   "paths": {
@@ -268,6 +276,16 @@
           "400": {
             "$ref": "#/components/responses/BadRequest"
           },
+          "404": {
+            "description": "No event has ever been indexed for this contract id: it may not exist, or this instance may not index it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
@@ -277,7 +295,8 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "description": "Three situations used to look identical here. They no longer do: a contract this instance has never indexed an event for is `404`; a contract that is indexed but has no events matching the filters returns `200` with an empty `events` array and `emptyReason: \"no_matching_events\"`."
       }
     },
     "/contracts/{contractId}/activity": {
@@ -756,6 +775,337 @@
         },
         "security": []
       }
+    },
+    "/graphql": {
+      "get": {
+        "tags": [
+          "graphql"
+        ],
+        "summary": "Run a GraphQL query (query string)",
+        "operationId": "graphqlGet",
+        "description": "Disabled by default (`404`); enable with `LENS_GRAPHQL=1`. Read-only: queries only. The schema covers `events`, `event`, `contracts`, `contract` and `topics`, with `Event.contract` joining an event to its contract summary. Documents are rejected before execution when deeper than `maxDepth` (default 8) or costlier than `maxComplexity` (default 5000). Introspection is not supported.",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "variables",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "JSON object, URL-encoded."
+          },
+          {
+            "name": "operationName",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result; resolver errors appear in `errors` alongside partial `data`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphQLResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The document failed to parse or validate, or exceeded the depth or complexity limits.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphQLResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "graphql"
+        ],
+        "summary": "Run a GraphQL query (JSON body)",
+        "operationId": "graphqlPost",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GraphQLRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphQLResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid document, or limits exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphQLResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "description": "Body larger than 100 KiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/webhooks": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "List webhooks",
+        "operationId": "listWebhooks",
+        "description": "Disabled by default (`404`); enable with `LENS_WEBHOOKS=1`.",
+        "responses": {
+          "200": {
+            "description": "Registered webhooks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "webhooks"
+                  ],
+                  "properties": {
+                    "webhooks": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Webhook"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Register a webhook",
+        "operationId": "createWebhook",
+        "description": "Matching events are POSTed as JSON `{ deliveryId, subscriptionId, event }` to `url`, in event order, starting with events indexed after registration. Each request carries `X-Lens-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of \"<t>.<raw body>\" keyed with the secret>`, plus `X-Lens-Delivery` (stable across retries \u2014 de-duplicate on it), `X-Lens-Event-Id` and `X-Lens-Attempt`. A non-2xx answer or a network error is retried with exponential backoff (up to 5 attempts; 4xx other than 408/429 is not retried); after that the event is recorded as a dead letter. Redirects are not followed. Delivery attempts are rate limited per webhook and per target host, and targets must be public hosts. Webhooks and dead letters are held in memory and are lost when the API restarts.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Registered. The signing secret is shown only here.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredWebhook"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyWebhooks"
+          }
+        }
+      }
+    },
+    "/webhooks/{webhookId}": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Get one webhook",
+        "operationId": "getWebhook",
+        "parameters": [
+          {
+            "name": "webhookId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The webhook",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Webhook"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Delete a webhook",
+        "operationId": "deleteWebhook",
+        "parameters": [
+          {
+            "name": "webhookId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/webhooks/{webhookId}/dead-letters": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "List a webhook's dead letters",
+        "operationId": "listWebhookDeadLetters",
+        "description": "Events that exhausted their retries, newest last; the most recent 100 are kept.",
+        "parameters": [
+          {
+            "name": "webhookId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dead letters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "deadLetters"
+                  ],
+                  "properties": {
+                    "deadLetters": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DeadLetter"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1081,7 +1431,7 @@
         }
       },
       "Unauthorized": {
-        "description": "The instance requires an API key and none, or an invalid one, was sent. Only returned when the operator has configured `LENS_API_KEYS`.",
+        "description": "The instance requires an API key and none, or an invalid one, was sent, or `/webhooks` requires `Authorization: Bearer <token>` and it was missing or wrong. Only returned when the operator has configured `LENS_API_KEYS`.",
         "headers": {
           "WWW-Authenticate": {
             "description": "The authentication challenge.",
@@ -1108,6 +1458,16 @@
             }
           }
         },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "TooManyWebhooks": {
+        "description": "The instance-wide or per-host webhook limit is reached",
         "content": {
           "application/json": {
             "schema": {
@@ -1458,6 +1818,13 @@
           "totalIsEstimate": {
             "type": "boolean",
             "description": "True when `total` came from a short-lived cache rather than a fresh COUNT(*) \u2014 accurate as of a couple of seconds ago, not necessarily this instant. Omitted entirely on an exact, freshly-computed count."
+          },
+          "emptyReason": {
+            "type": "string",
+            "enum": [
+              "no_matching_events"
+            ],
+            "description": "Present only on an empty page of `GET /contracts/{contractId}/events`: the contract is indexed, but nothing matches the filters."
           }
         }
       },
@@ -1677,6 +2044,214 @@
               "type": "string"
             },
             "description": "Ids with no indexed event."
+          }
+        }
+      },
+      "WebhookFilter": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "All fields are ANDed. Same semantics as the matching query parameters of the event routes.",
+        "properties": {
+          "contractId": {
+            "type": "string",
+            "pattern": "^C[A-Z2-7]{55}$"
+          },
+          "topics": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": "Topic prefix; `null` is a wildcard for that position."
+          },
+          "address": {
+            "type": "string",
+            "pattern": "^[GC][A-Z2-7]{55}$"
+          }
+        }
+      },
+      "WebhookRequest": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 2048,
+            "description": "Public http(s) URL. Loopback, private, link-local and reserved addresses, embedded credentials and other schemes are rejected."
+          },
+          "filter": {
+            "$ref": "#/components/schemas/WebhookFilter"
+          },
+          "secret": {
+            "type": "string",
+            "minLength": 16,
+            "description": "Signing secret. Generated when omitted."
+          }
+        }
+      },
+      "Webhook": {
+        "type": "object",
+        "required": [
+          "id",
+          "url",
+          "filter",
+          "createdAt",
+          "delivered",
+          "deadLettered"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "url": {
+            "type": "string"
+          },
+          "filter": {
+            "$ref": "#/components/schemas/WebhookFilter"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "delivered": {
+            "type": "integer",
+            "description": "Events delivered with a 2xx response."
+          },
+          "deadLettered": {
+            "type": "integer",
+            "description": "Events that exhausted their retries."
+          }
+        }
+      },
+      "RegisteredWebhook": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Webhook"
+          },
+          {
+            "type": "object",
+            "required": [
+              "secret"
+            ],
+            "properties": {
+              "secret": {
+                "type": "string",
+                "description": "HMAC signing secret. Shown only in this response."
+              }
+            }
+          }
+        ]
+      },
+      "DeadLetter": {
+        "type": "object",
+        "required": [
+          "id",
+          "subscriptionId",
+          "eventId",
+          "attempts",
+          "lastError",
+          "failedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "subscriptionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventId": {
+            "type": "string"
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "lastError": {
+            "type": "string"
+          },
+          "failedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "GraphQLRequest": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "variables": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "operationName": {
+            "type": "string"
+          }
+        }
+      },
+      "GraphQLResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "message",
+                "extensions"
+              ],
+              "properties": {
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
+                  }
+                },
+                "extensions": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "GRAPHQL_PARSE_FAILED",
+                        "GRAPHQL_VALIDATION_FAILED",
+                        "BAD_USER_INPUT",
+                        "QUERY_TOO_DEEP",
+                        "QUERY_TOO_COMPLEX",
+                        "QUERY_TOO_LARGE",
+                        "INTERNAL_ERROR"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       },

@@ -26,6 +26,14 @@ Access control (all off unless set):
   LENS_API_KEYS          Comma-separated API keys; when set, requests must send
                          X-API-Key or Authorization: Bearer <key>.
   LENS_TRUST_PROXY       1 to read the client IP from X-Forwarded-For (behind a proxy).
+
+Optional features (both off by default):
+  LENS_GRAPHQL=1                 Serve GraphQL at /graphql.
+  LENS_GRAPHQL_MAX_DEPTH=<n>     Deepest query allowed (default 8).
+  LENS_GRAPHQL_MAX_COMPLEXITY=<n> Highest estimated query cost (default 5000).
+  LENS_WEBHOOKS=1                Serve webhook subscriptions at /webhooks.
+  LENS_WEBHOOKS_TOKEN=<secret>   Require this bearer token on /webhooks (recommended).
+  LENS_WEBHOOKS_ALLOW_PRIVATE=1  Allow loopback/private targets. Development only.
 `;
 
 const { values } = parseArgs({
@@ -80,6 +88,15 @@ function parseRateLimit(): { requestsPerSecond: number; burst?: number } | undef
 }
 
 const store = new SqliteEventStore({ path: dbPath, log });
+
+/** A positive integer from the environment, or undefined when unset or unusable. */
+function envInt(name: string): number | undefined {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value > 0 ? value : undefined;
+}
+const graphqlMaxDepth = envInt('LENS_GRAPHQL_MAX_DEPTH');
+const graphqlMaxComplexity = envInt('LENS_GRAPHQL_MAX_COMPLEXITY');
+const webhookToken = process.env.LENS_WEBHOOKS_TOKEN;
 const server = createApiServer({
   store,
   ...(rateLimit ? { rateLimit } : {}),
@@ -90,6 +107,16 @@ const server = createApiServer({
     ? { corsOrigin: values.cors ?? (process.env.LENS_CORS_ORIGIN as string) }
     : {}),
   log,
+  graphql: {
+    enabled: process.env.LENS_GRAPHQL === '1',
+    ...(graphqlMaxDepth !== undefined ? { maxDepth: graphqlMaxDepth } : {}),
+    ...(graphqlMaxComplexity !== undefined ? { maxComplexity: graphqlMaxComplexity } : {}),
+  },
+  webhooks: {
+    enabled: process.env.LENS_WEBHOOKS === '1',
+    allowPrivateNetworks: process.env.LENS_WEBHOOKS_ALLOW_PRIVATE === '1',
+    ...(webhookToken ? { authToken: webhookToken } : {}),
+  },
 });
 
 server.listen(port, host, () => {

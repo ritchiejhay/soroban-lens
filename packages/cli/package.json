@@ -1,16 +1,22 @@
 {
   "name": "@soroban-lens/cli",
   "version": "0.1.0",
-  "description": "Module 5 — lens CLI: doctor preflight, indexer runner, fixture seeding.",
+  "description": "Module 5 \u2014 lens CLI: doctor preflight, indexer runner, fixture seeding.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": "./dist/index.js" },
-  "bin": { "lens": "./dist/bin.js" },
-  "files": ["dist"],
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "bin": {
+    "lens": "./dist/bin.js"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node init && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test test/*.test.js",
     "test:integration": "npm run build && node --test --test-timeout=300000 integration/*.integration.test.js"
@@ -20,5 +26,8 @@
     "@soroban-lens/store": "*",
     "@stellar/stellar-sdk": "^17.1.0"
   },
-  "devDependencies": { "typescript": "^7.0.2", "@types/node": "^26.6.5" }
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "@types/node": "^26.6.5"
+  }
 }
