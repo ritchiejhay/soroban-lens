@@ -1,6 +1,8 @@
 /*
  * Hand-written CSS, no design system dependency — that is a project constraint.
- * Light theme only in v0.1; dark mode is tracked in ISSUES.md.
+ * Light and dark themes: the palette lives in custom properties. Dark follows
+ * the system setting unless the user picked a theme with the toggle, which
+ * sets data-theme on <html> (see useTheme and the script in index.html).
  */
 
 :root {
@@ -15,8 +17,53 @@
   --warn-border: #e0b884;
   --warn-text: #7a4f15;
   --error: #a8352b;
+  --error-bg: #fbeae8;
+  --pill-bg: #eee;
+  --detail-bg: #fcfcfb;
+  color-scheme: light;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --radius: 6px;
+}
+
+/* The dark palette is defined twice because CSS cannot share one rule between
+   a media query and an attribute selector: once for "system says dark and the
+   user has not forced light", once for "user forced dark". Keep them in sync. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121413;
+    --surface: #1b1d1b;
+    --border: #353835;
+    --text: #e8e8e4;
+    --muted: #a3a39d;
+    --accent: #6fcf97;
+    --accent-soft: #1f3a2c;
+    --warn-bg: #3a2b14;
+    --warn-border: #8a6a2f;
+    --warn-text: #f0cf9a;
+    --error: #ff8a80;
+    --error-bg: #3d1f1c;
+    --pill-bg: #2a2d2a;
+    --detail-bg: #161816;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #121413;
+  --surface: #1b1d1b;
+  --border: #353835;
+  --text: #e8e8e4;
+  --muted: #a3a39d;
+  --accent: #6fcf97;
+  --accent-soft: #1f3a2c;
+  --warn-bg: #3a2b14;
+  --warn-border: #8a6a2f;
+  --warn-text: #f0cf9a;
+  --error: #ff8a80;
+  --error-bg: #3d1f1c;
+  --pill-bg: #2a2d2a;
+  --detail-bg: #161816;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -30,6 +77,7 @@ body {
 
 .app { max-width: 1180px; margin: 0 auto; padding: 24px 20px 64px; }
 
+.app-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .app-header h1 { margin: 0; font-size: 26px; letter-spacing: -0.02em; font-weight: 650; }
 .app-header .accent { color: var(--accent); }
 .tagline { margin: 4px 0 20px; color: var(--muted); }
@@ -63,6 +111,14 @@ body {
 }
 
 
+.theme-toggle {
+  font: inherit; font-size: 12px; font-weight: 500;
+  padding: 4px 10px; border: 1px solid var(--border); border-radius: 4px;
+  background: var(--surface); color: var(--text); cursor: pointer;
+}
+.theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* ---------- status bar ---------- */
 
 .status-bar {
@@ -81,10 +137,10 @@ body {
 
 .status-pill {
   font-size: 12px; font-weight: 600; padding: 2px 9px;
-  border-radius: 999px; background: #eee; color: var(--muted);
+  border-radius: 999px; background: var(--pill-bg); color: var(--muted);
 }
 .status-ok { background: var(--accent-soft); color: var(--accent); }
-.status-degraded, .status-error { background: #fbeae8; color: var(--error); }
+.status-degraded, .status-error { background: var(--error-bg); color: var(--error); }
 
 /* ---------- filters ---------- */
 
@@ -176,7 +232,7 @@ body {
 
 /* ---------- expanded detail ---------- */
 
-.detail-row td { background: #fcfcfb; padding: 0; }
+.detail-row td { background: var(--detail-bg); padding: 0; }
 .detail { padding: 14px 18px 18px; }
 .detail h4 { margin: 18px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 .detail h5 { margin: 10px 0 4px; font-size: 11px; color: var(--muted); }

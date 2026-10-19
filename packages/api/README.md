@@ -30,6 +30,8 @@ curl "localhost:8080/contracts/CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2
 | `GET /events/stream` | Live events as Server-Sent Events, same filters as `/events` plus `contractId`. |
 | `GET /events/{id}` | One event by RPC event id. |
 | `GET /openapi.json` | The spec below, served from disk. |
+| `GET`/`POST /graphql` | Optional GraphQL over the same data. **Off by default** — see below. |
+| `POST`/`GET /webhooks`, `GET`/`DELETE /webhooks/{id}`, `GET /webhooks/{id}/dead-letters` | Optional webhook subscriptions. **Off by default** — see below. |
 
 Every event-returning route accepts `?fields=id,ledger,topics,value` to return only
 those event properties. Omitted, every property is returned. `topicsXdr` and
@@ -46,6 +48,110 @@ and its named, typed fields. It sits next to the generic `topics`/`value`,
 never in place of them, and is simply absent otherwise. Typed views are
 computed at read time from the stored raw XDR, so a spec fetched today applies
 to events indexed last week.
+
+### Empty pages: unknown contract vs. no events
+
+`GET /contracts/{id}/events` distinguishes three cases that used to look alike:
+
+| Situation | Response |
+|---|---|
+| The contract has never been seen (not indexed, or not a real contract) | `404` |
+| The contract is indexed but nothing matches the filters | `200`, `events: []` and `emptyReason: "no_matching_events"` |
+| The contract is indexed and has matching events | `200`, no `emptyReason` |
+
+The web UI's empty state uses the distinction.
+
+## GraphQL (optional)
+
+Disabled by default: `/graphql` answers `404` until you start the API with
+`LENS_GRAPHQL=1`. It is read-only and sits over the same `EventStore` as the REST
+routes, which are untouched.
+
+```bash
+LENS_GRAPHQL=1 node packages/api/dist/bin.js
+curl -s localhost:8080/graphql -H 'content-type: application/json' -d '{
+  "query": "query($id: String!) { contract(id: $id) { eventCount events(limit: 3) { total events { id ledger topics { type value } } } } }",
+  "variables": { "id": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC" }
+}'
+```
+
+The schema covers events, contracts and topics: `events(...)`, `event(id)`,
+`contracts(limit)`, `contract(id)` and `topics(contractId, limit)`. `events`
+takes the same filters as the REST routes (`topics`, `fromLedger`, `toLedger`,
+`fromTime`, `toTime`, `txHash`, `address`, `search`, `successfulOnly`, `limit`,
+`cursor`, `order`) and validates them with the same code. `Event.contract`
+joins an event to its contract summary; `Contract.events` and `Contract.topics`
+go the other way. Queries only: mutations, subscriptions and introspection are
+rejected.
+
+**Unbounded queries are refused before the store is touched.** Every document is
+analysed first and rejected with `400` if it is deeper than `maxDepth`
+(`LENS_GRAPHQL_MAX_DEPTH`, default 8) or its estimated cost exceeds
+`maxComplexity` (`LENS_GRAPHQL_MAX_COMPLEXITY`, default 5000). Cost counts every
+field once and multiplies list fields by the number of items they can return, so
+nested pagination is what gets expensive: `contracts(limit: 100) { events(limit: 100) { events { id } } }`
+is far over the default, while one page of 50 events with a few fields is not.
+Documents longer than 10 000 characters are refused too. Error codes appear in
+`errors[].extensions.code`: `QUERY_TOO_DEEP`, `QUERY_TOO_COMPLEX`,
+`QUERY_TOO_LARGE`, `GRAPHQL_PARSE_FAILED`, `GRAPHQL_VALIDATION_FAILED`,
+`BAD_USER_INPUT`.
+
+The implementation is a small hand-written parser and executor rather than
+`graphql-js`, to keep the API free of new runtime dependencies.
+
+## Webhook subscriptions (optional)
+
+Disabled by default: the `/webhooks` routes answer `404` until you start the API
+with `LENS_WEBHOOKS=1`. Enabling them makes the server send HTTP requests to
+URLs that clients choose, so set `LENS_WEBHOOKS_TOKEN` too if the API is reachable
+by anyone you do not trust — every `/webhooks` route then requires
+`Authorization: Bearer <token>`.
+
+```bash
+curl -s localhost:8080/webhooks -H 'content-type: application/json' -d '{
+  "url": "https://example.org/hooks/lens",
+  "filter": { "contractId": "CDLZ…", "topics": ["transfer"] }
+}'
+```
+
+The response includes a `secret`, shown only once. `filter` takes `contractId`,
+`topics` (a prefix; `null` is a wildcard) and `address`, with the same meaning as
+on the event routes. A new subscription receives events indexed **after** it was
+registered, in order.
+
+Each matching event is POSTed as `{ "deliveryId", "subscriptionId", "event" }` with:
+
+| Header | Meaning |
+|---|---|
+| `X-Lens-Signature` | `t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw body>">`, keyed with the secret. Reject old `t` values to limit replay. `verifyWebhookSignature` (exported) implements the check. |
+| `X-Lens-Delivery` | Stable across retries of one delivery — de-duplicate on it. |
+| `X-Lens-Event-Id` | The event id. |
+| `X-Lens-Attempt` | 1-based attempt number. |
+
+**Retries and dead letters.** A network error, timeout, `5xx`, `408` or `429` is
+retried with exponential backoff (1 s, 2 s, 4 s … capped at 5 minutes, at most 5
+attempts). Any other non-2xx answer, including redirects (never followed), is
+final. After that the event is recorded as a dead letter —
+`GET /webhooks/{id}/dead-letters` — and delivery continues with the next event,
+so one dead receiver stalls only its own subscription.
+
+**It cannot be used to flood a third party:**
+
+- Targets must be public `http`/`https` hosts: no credentials in the URL, and no
+  loopback, private, link-local, CGNAT, multicast or reserved addresses. The name
+  is resolved and checked at registration *and* again on the connection that is
+  actually made, which defeats DNS rebinding.
+- Deliveries are rate limited per webhook (60 attempts/minute) and per target
+  host across all webhooks (120/minute), and retries count against both. A
+  backlog is metered out, never sent in a burst.
+- At most 100 webhooks in total and 5 per host.
+
+`LENS_WEBHOOKS_ALLOW_PRIVATE=1` lifts the private-network restriction for local
+development only.
+
+Webhooks and dead letters are held in memory: they are lost when the API
+restarts, and clients re-register. The dispatcher polls the store, because the
+indexer is a separate process.
 
 ## OpenAPI
 

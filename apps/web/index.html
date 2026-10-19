@@ -5,6 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>soroban-lens</title>
     <meta name="description" content="Explore events emitted by Soroban smart contracts." />
+    <meta name="color-scheme" content="light dark" />
+    <script>
+      // Runs before first paint so a saved theme choice never flashes the wrong
+      // palette. Same key and JSON encoding as usePersistentState('lens.theme').
+      try {
+        var theme = JSON.parse(window.localStorage.getItem('lens.theme'));
+        if (theme === 'light' || theme === 'dark') {
+          document.documentElement.setAttribute('data-theme', theme);
+        }
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -116,3 +116,37 @@ export function usePersistentState<T>(key: string, initial: T): [T, (value: T) =
 
   return [state, set];
 }
+
+export type Theme = 'light' | 'dark';
+
+function systemTheme(): Theme {
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+/**
+ * The active theme, and a toggle that overrides the system setting in either
+ * direction. With no saved choice the system setting wins (the CSS handles that
+ * on its own); an explicit choice is written to `data-theme`, which the
+ * stylesheet and the pre-paint script in index.html both read.
+ */
+export function useTheme(): [Theme, () => void] {
+  const [saved, setSaved] = usePersistentState<Theme | null>('lens.theme', null);
+  const [system, setSystem] = useState<Theme>(systemTheme);
+
+  useEffect(() => {
+    const media = window.matchMedia?.('(prefers-color-scheme: dark)');
+    if (!media) return;
+    const onChange = (): void => setSystem(media.matches ? 'dark' : 'light');
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, []);
+
+  useEffect(() => {
+    if (saved) document.documentElement.setAttribute('data-theme', saved);
+    else document.documentElement.removeAttribute('data-theme');
+  }, [saved]);
+
+  const theme = saved ?? system;
+  const toggle = useCallback(() => setSaved(theme === 'dark' ? 'light' : 'dark'), [theme, setSaved]);
+  return [theme, toggle];
+}
