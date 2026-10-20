@@ -8,13 +8,12 @@ dist/
 apps/web/src/**/*.js
 apps/web/vite.config.js
 
-.env
-.env.local
 data/
 *.db
 *.db-wal
 *.db-shm
 .DS_Store
+temp_auto_push.bat
 
 # Emitted by tsconfig.test.json so node --test has real .js to import.
 apps/web/.test-build/
@@ -33,3 +32,6 @@ bench/results/
 crash.log
 *.tfvars
 *.tfvars.json
+.gitignore
+branch_structure.json
+config.bat

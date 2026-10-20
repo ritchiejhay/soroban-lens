@@ -8,7 +8,7 @@ import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { usePersistentState, usePolling, useDebounced, useEventStream, useTheme } from './hooks.js';
 
 /** Testnet Stellar Asset Contract for native XLM — always emitting events. */
-const EXAMPLE_CONTRACT = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC'; // XLM SAC
+const EXAMPLE_CONTRACT = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMPQVUU2HHGCYSC'; // XLM SAC
 const PAGE_SIZE = 50;
 const LIVE_INTERVAL_MS = 5000;
 const CONTRACT_ID_PATTERN = /^C[A-Z2-7]{55}$/;
@@ -40,6 +40,9 @@ export function App(): React.JSX.Element {
   const [contractUnknown, setContractUnknown] = useState(false);
   const [emptyReason, setEmptyReason] = useState<'no_matching_events' | null>(null);
   const [theme, toggleTheme] = useTheme();
+  // Absolute vs relative timestamps in the Ledger column. Persisted so the
+  // choice survives a reload, like the theme.
+  const [absoluteTime, setAbsoluteTime] = usePersistentState('lens.absoluteTime', false);
 
   // Typing a 56-character contract id should not fire 56 requests.
   const debouncedContractId = useDebounced(filters.contractId, 300);
@@ -212,7 +215,7 @@ export function App(): React.JSX.Element {
       `"${JSON.stringify(e.value.value).replace(/"/g, '""')}"`,
     ]);
     const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob([csvSontent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -226,7 +229,7 @@ export function App(): React.JSX.Element {
       <header className="app-header">
         <div>
           <h1>
-            soroban<span className="accent">-lens</span>
+            soroban <span className="accent">-</span>lens
           </h1>
           <p className="tagline">See what your Soroban contracts are actually emitting.</p>
         </div>
@@ -290,6 +293,14 @@ export function App(): React.JSX.Element {
         </div>
         {events.length > 0 && (
           <div className="export-actions">
+            <button
+              type="button"
+              className="btn-export"
+              onClick={() => setAbsoluteTime(!absoluteTime)}
+              title={absoluteTime ? 'Show relative timestamps' : 'Show absolute timestamps'}
+            >
+              {absoluteTime ? 'Relative time' : 'Absolute time'}
+            </button>
             <button type="button" className="btn-export" onClick={exportJson} title="Export current events as JSON">
               Export JSON
             </button>
@@ -306,6 +317,7 @@ export function App(): React.JSX.Element {
           showContract={showContract}
           loading={loading}
           onTopicClick={(topic) => setFilters({ ...filters, topic })}
+          absolute={absoluteTime}
           emptyMessage={
             contractUnknown
               ? 'This contract has not been seen by this indexer. Check the id, and that it is one this instance indexes (LENS_CONTRACT_IDS).'
@@ -319,16 +331,14 @@ export function App(): React.JSX.Element {
       </ErrorBoundary>
 
       {nextCursor && (
-        <button type="button" className="load-more" onClick={() => void loadMore()} disabled={loadingMore}>
-          {loadingMore ? 'Loading…' : `Load ${PAGE_SIZE} more`}
+        <button type="button" className="load-more" onClick={loadMore} disabled={loadingMore}>
+          {loadingMore ? 'Loading…' : 'Load more'}
         </button>
       )}
 
       <footer className="app-footer">
-        <span>Read-only explorer · v0.1</span>
-        <a href={`${selected.baseUrl}/openapi.json`} target="_blank" rel="noreferrer">
-          API spec
-        </a>
+        <span>Soroban Lens — a reading lens for Soroban contract events.</span>
+        <a href="https://github.com/soroban-forge-labs/soroban-lens">Source</a>
       </footer>
     </div>
   );

@@ -1,16 +1,22 @@
 {
   "name": "@soroban-lens/store",
   "version": "0.1.0",
-  "description": "Module 2 — XDR decoding, schema, migrations and the storage trait.",
+  "description": "Module 2 \u2014 XDR decoding, schema, migrations and the storage trait.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": "./dist/index.js" },
-  "bin": { "soroban-lens-store": "./dist/bin.js" },
-  "files": ["dist"],
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "bin": {
+    "soroban-lens-store": "./dist/bin.js"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node init && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test test/*.test.js",
     "bench:count-cache": "npm run build && node bench/count-cache.bench.js",
@@ -19,8 +25,19 @@
     "bench:address-index": "npm run build && node bench/address-index.bench.js",
     "bench:fts-search": "npm run build && node bench/fts-search.bench.js"
   },
-  "dependencies": { "@stellar/stellar-sdk": "^17.2.1" },
-  "peerDependencies": { "pg": "^8.13.0" },
-  "peerDependenciesMeta": { "pg": { "optional": true } },
-  "devDependencies": { "typescript": "^7.0.2", "@types/node": "^26.6.5" }
+  "dependencies": {
+    "@stellar/stellar-sdk": "^17.2.1"
+  },
+  "peerDependencies": {
+    "pg": "^8.13.0"
+  },
+  "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "@types/node": "^26.6.5"
+  }
 }
