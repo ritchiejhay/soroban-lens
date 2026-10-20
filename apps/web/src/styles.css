@@ -5,7 +5,7 @@
  * sets data-theme on <html> (see useTheme and the script in index.html).
  */
 
-:root {
+.root {
   --bg: #fbfbfa;
   --surface: #ffffff;
   --border: #e3e3df;
@@ -215,6 +215,9 @@ body {
 .event-row:hover { background: var(--accent-soft); }
 .event-row.is-expanded { background: var(--accent-soft); }
 .event-row.is-failed .col-ledger .mono { text-decoration: line-through; color: var(--muted); }
+
+.timestamp { cursor: help; white-space: nowrap; }
+.timestamp-absolute { font-family: var(--mono); font-size: 0.92em; white-space: nowrap; }
 
 .topic-chip {
   font: inherit; font-family: var(--mono); font-size: 0.9em;
