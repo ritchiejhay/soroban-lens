@@ -1,13 +1,13 @@
 {
   "name": "@soroban-lens/web",
   "version": "0.1.0",
-  "description": "Module 4 — single-page Soroban event explorer.",
+  "description": "Module 4 \u2014 single-page Soroban event explorer.",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
+    "dev": "node init && vite",
+    "build": "node init && tsc -b && vite build",
     "typecheck": "tsc -b --force",
     "preview": "vite preview --host 0.0.0.0",
     "test": "npm run build && tsc -p tsconfig.test.json && node --test test/*.test.js"
